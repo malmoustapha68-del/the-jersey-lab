@@ -1,542 +1,178 @@
-import streamlit as st
-import os
 import json
-import hashlib
+import os
 import hmac
 from pathlib import Path
-from datetime import datetime
 from urllib.parse import quote
+from datetime import datetime
+import streamlit as st
 
-st.set_page_config(
-    page_title="THE JERSEY LAB — BY MOMO",
-    page_icon="⚽",
-    layout="wide"
-)
+st.set_page_config(page_title='THE JERSEY LAB — BY MOMO', page_icon='⚽', layout='wide')
+DATA = Path('data'); UPLOADS = Path('uploads')
+DATA.mkdir(exist_ok=True); UPLOADS.mkdir(exist_ok=True)
+PRODUCTS = DATA / 'products.json'; ORDERS = DATA / 'orders.json'
+WHATSAPP = '2250141766774'
 
-# --------------------------------------------------
-# CONFIGURATION
-# --------------------------------------------------
-
-DATA_DIR = Path("data")
-UPLOAD_DIR = Path("uploads")
-DATA_DIR.mkdir(exist_ok=True)
-UPLOAD_DIR.mkdir(exist_ok=True)
-
-PRODUCTS_FILE = DATA_DIR / "products.json"
-ORDERS_FILE = DATA_DIR / "orders.json"
-
-# Le mot de passe sera configuré dans Streamlit Secrets.
-# Ne place jamais ton vrai mot de passe dans le code public.
-
-
-def load_json(path, default):
+def read_json(path, default):
     try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        st.error(f"Impossible de lire le fichier {path.name}.")
-    return default
+        return json.loads(path.read_text(encoding='utf-8')) if path.exists() else default
+    except (OSError, ValueError):
+        return default
 
+def write_json(path, value):
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
 
-def save_json(path, data):
-    path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+def fcfa(value):
+    return f'{int(value):,}'.replace(',', ' ') + ' FCFA'
 
+if not PRODUCTS.exists(): write_json(PRODUCTS, [])
+if not ORDERS.exists(): write_json(ORDERS, [])
+if 'cart' not in st.session_state: st.session_state.cart = []
+if 'admin' not in st.session_state: st.session_state.admin = False
+if 'page' not in st.session_state: st.session_state.page = 'Boutique'
 
-def money(value):
-    return f"{int(value):,}".replace(",", " ") + " FCFA"
+st.markdown('''<style>
+.stApp {background:#f8f7f5;color:#151515}
+.block-container {max-width:1250px;padding-top:1.5rem}
+h1,h2,h3 {font-family:Georgia,serif;letter-spacing:-.025em}
+.brand {font-family:Georgia,serif;font-size:clamp(2.2rem,6vw,4.5rem);font-weight:bold;line-height:1.1}
+.brand span {color:#c97f9e}.eyebrow {letter-spacing:.25em;font-size:.72rem;color:#777}
+.subtitle {color:#666;max-width:640px;line-height:1.7}
+.product {background:white;border:1px solid #eae5e3;padding:15px;border-radius:5px;margin-bottom:8px}
+.category {font-size:.7rem;color:#999;letter-spacing:.15em;text-transform:uppercase}
+.price {font-size:1.2rem;font-weight:700}.muted {color:#777;font-size:.9rem}
+.stButton button[kind=primary] {background:#151515;color:white;border-color:#151515;border-radius:3px}
+.stButton button[kind=primary]:hover {background:#c97f9e;border-color:#c97f9e;color:white}
+</style>''', unsafe_allow_html=True)
 
+products = read_json(PRODUCTS, [])
+st.markdown('<div class="eyebrow">SÉLECTION FOOTBALL · CÔTE D’IVOIRE</div>', unsafe_allow_html=True)
+st.markdown('<div class="brand">THE JERSEY <span>LAB</span></div>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">BY MOMO — Des maillots choisis pour les passionnés. Une sélection simple, un style affirmé, une commande directe.</p>', unsafe_allow_html=True)
+st.caption(f'🛍️ Panier : {sum(x["quantity"] for x in st.session_state.cart)} article(s)')
+nav = st.radio('Navigation', ['Boutique', 'Mon panier', 'Administration'], horizontal=True, index=['Boutique','Mon panier','Administration'].index(st.session_state.page))
+st.session_state.page = nav
+st.divider()
 
-def init_data():
-    if not PRODUCTS_FILE.exists():
-        save_json(PRODUCTS_FILE, [])
-    if not ORDERS_FILE.exists():
-        save_json(ORDERS_FILE, [])
+if nav == 'Boutique':
+    st.header('La sélection')
+    st.caption('Choisis ton maillot et ajoute-le au panier sans quitter la boutique.')
+    available = [p for p in products if p.get('available', True)]
+    categories = ['Toutes'] + sorted({p.get('category','Autre') for p in available})
+    a,b = st.columns([1,2]); category = a.selectbox('Catégorie', categories); search = b.text_input('Rechercher', placeholder='Club, sélection, maillot…')
+    visible = [p for p in available if (category == 'Toutes' or p.get('category') == category) and search.casefold() in p.get('name','').casefold()]
+    if not visible: st.info('Aucun maillot disponible pour cette recherche. Connecte-toi à l’administration pour en ajouter.')
+    for start in range(0,len(visible),3):
+        cols = st.columns(3, gap='large')
+        for col,p in zip(cols,visible[start:start+3]):
+            with col:
+                st.markdown('<div class="product">', unsafe_allow_html=True)
+                image = p.get('image','')
+                if image and (image.startswith(('https://','http://')) or Path(image).is_file()):
+                    st.image(image, use_container_width=True)
+                else: st.markdown('<div style="height:180px;background:#eeecea;display:flex;align-items:center;justify-content:center;font-size:50px">⚽</div>', unsafe_allow_html=True)
+                st.markdown(f'<p class="category">{p.get("category","Maillot")}</p>', unsafe_allow_html=True)
+                st.subheader(p.get('name','Maillot'))
+                st.markdown(f'<p class="price">{fcfa(p.get("price",0))}</p>', unsafe_allow_html=True)
+                if p.get('description'): st.caption(p['description'])
+                sizes = p.get('sizes',['S','M','L','XL'])
+                if isinstance(sizes,str): sizes = [x.strip() for x in sizes.split(',') if x.strip()]
+                size = st.selectbox('Taille',sizes or ['M'],key=f'size_{p["id"]}')
+                qty = st.number_input('Quantité',1,20,1,key=f'qty_{p["id"]}')
+                if st.button('Ajouter au panier',key=f'add_{p["id"]}',type='primary',use_container_width=True):
+                    existing = next((x for x in st.session_state.cart if x['id']==p['id'] and x['size']==size),None)
+                    if existing: existing['quantity'] += qty
+                    else: st.session_state.cart.append({'id':p['id'],'name':p['name'],'price':int(p['price']),'size':size,'quantity':qty})
+                    st.toast('Maillot ajouté au panier !',icon='🛍️'); st.rerun()
+                st.markdown('</div>',unsafe_allow_html=True)
 
-
-init_data()
-
-
-# --------------------------------------------------
-# STYLE
-# --------------------------------------------------
-
-st.markdown("""
-<style>
-.stApp {
-    background: #090909;
-    color: #ffffff;
-}
-h1, h2, h3 {
-    color: #ff3d9a !important;
-}
-.lab-banner {
-    background: linear-gradient(135deg, #191919, #080808);
-    border: 1px solid #ff3d9a;
-    border-radius: 15px;
-    padding: 28px 12px;
-    text-align: center;
-    margin-bottom: 24px;
-}
-.lab-title {
-    color: #ff3d9a;
-    font-size: clamp(30px, 7vw, 54px);
-    font-weight: 900;
-    letter-spacing: 2px;
-}
-.lab-subtitle {
-    color: white;
-    letter-spacing: 5px;
-}
-.product {
-    background: #161616;
-    border: 1px solid #333333;
-    border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 15px;
-}
-.price {
-    color: #ff3d9a;
-    font-size: 23px;
-    font-weight: bold;
-}
-.stButton > button {
-    border: 1px solid #ff3d9a;
-    border-radius: 8px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# --------------------------------------------------
-# EN-TÊTE
-# --------------------------------------------------
-
-st.markdown("""
-<div class="lab-banner">
-    <div class="lab-title">THE JERSEY LAB</div>
-    <div class="lab-subtitle">BY MOMO</div>
-    <p>FOOTBALL CULTURE • STREETWEAR • IDENTITY</p>
-</div>
-""", unsafe_allow_html=True)
-
-
-# --------------------------------------------------
-# SESSION
-# --------------------------------------------------
-
-if "cart" not in st.session_state:
-    st.session_state.cart = {}
-
-if "admin_logged_in" not in st.session_state:
-    st.session_state.admin_logged_in = False
-
-
-# --------------------------------------------------
-# DONNÉES
-# --------------------------------------------------
-
-products = load_json(PRODUCTS_FILE, [])
-orders = load_json(ORDERS_FILE, [])
-
-
-# --------------------------------------------------
-# NAVIGATION
-# --------------------------------------------------
-
-page = st.radio(
-    "Navigation",
-    ["Boutique", "Mon panier", "Administration"],
-    horizontal=True
-)
-
-
-# --------------------------------------------------
-# BOUTIQUE PUBLIQUE
-# --------------------------------------------------
-
-if page == "Boutique":
-    st.header("⚡ LE LABORATOIRE DU MAILLOT")
-    st.write("Le football rencontre le streetwear.")
-
-    search = st.text_input(
-        "Rechercher un maillot",
-        placeholder="Nom du club ou du modèle..."
-    )
-
-    visible = [
-        p for p in products
-        if search.lower() in p["name"].lower()
-        and int(p.get("stock", 0)) > 0
-    ]
-
-    if not visible:
-        st.info(
-            "Aucun maillot disponible pour le moment. "
-            "Les nouveaux modèles seront affichés ici."
-        )
-
-    columns = st.columns(2)
-
-    for index, product in enumerate(visible):
-        with columns[index % 2]:
-            st.markdown('<div class="product">', unsafe_allow_html=True)
-
-            photo = product.get("photo", "")
-            if photo and Path(photo).exists():
-                st.image(photo, use_container_width=True)
-            else:
-                st.markdown("## ⚽")
-
-            st.subheader(product["name"])
-            st.caption(product.get("category", "Sélection du Lab"))
-
-            st.markdown(
-                f'<div class="price">{money(product["price"])}</div>',
-                unsafe_allow_html=True
-            )
-
-            sizes = product.get("sizes", ["M", "L", "XL"])
-            size = st.selectbox(
-                "Taille",
-                sizes,
-                key=f"size_{product['id']}"
-            )
-
-            st.caption(f"En stock : {product['stock']}")
-
-            if st.button(
-                "＋ Ajouter au panier",
-                key=f"add_{product['id']}"
-            ):
-                key = f"{product['id']}|{size}"
-                st.session_state.cart[key] = (
-                    st.session_state.cart.get(key, 0) + 1
-                )
-                st.success("Ajouté au panier !")
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-
-# --------------------------------------------------
-# PANIER ET COMMANDE WHATSAPP
-# --------------------------------------------------
-
-elif page == "Mon panier":
-    st.header("🛒 MON PANIER")
-
-    products_by_id = {str(p["id"]): p for p in products}
-    total = 0
-    message_lines = ["Bonjour THE JERSEY LAB — BY MOMO !"]
-    valid_items = []
-
-    for key, quantity in list(st.session_state.cart.items()):
-        product_id, size = key.split("|", 1)
-        product = products_by_id.get(product_id)
-
-        if not product:
-            continue
-
-        subtotal = int(product["price"]) * quantity
-        total += subtotal
-        valid_items.append((key, product, size, quantity))
-
-        st.write(
-            f"**{product['name']}** — Taille {size} — "
-            f"{quantity} × {money(product['price'])}"
-        )
-
-        message_lines.append(
-            f"- {product['name']} / Taille {size} / Quantité : {quantity}"
-        )
-
-        if st.button("Retirer", key=f"remove_{key}"):
-            del st.session_state.cart[key]
-            st.rerun()
-
-    if valid_items:
-        st.divider()
-        st.subheader(f"Total indicatif : {money(total)}")
-
-        client_name = st.text_input("Ton nom")
-        client_phone = st.text_input("Ton numéro de téléphone")
-        client_city = st.text_input("Ta commune")
-
-        if client_name and client_phone and client_city:
-            message_lines.extend([
-                f"Nom : {client_name}",
-                f"Téléphone : {client_phone}",
-                f"Commune : {client_city}",
-                f"Total indicatif : {money(total)}",
-                "Merci de confirmer la disponibilité et les modalités."
-            ])
-
-            whatsapp_message = quote("\n".join(message_lines))
-            whatsapp_link = (
-                "https://wa.me/2250141766774?text="
-                + whatsapp_message
-            )
-
-            st.link_button(
-                "📲 Continuer sur WhatsApp",
-                whatsapp_link
-            )
-
-            st.caption(
-                "La commande n'est pas confirmée tant que "
-                "la boutique n'a pas validé la disponibilité."
-            )
-        else:
-            st.info("Renseigne ton nom, ton téléphone et ta commune.")
+elif nav == 'Mon panier':
+    st.header('Mon panier')
+    cart = st.session_state.cart
+    if not cart: st.info('Ton panier est vide. Va dans Boutique pour choisir tes maillots.')
     else:
-        st.info("Ton panier est vide.")
-
-
-# --------------------------------------------------
-# ADMINISTRATION
-# --------------------------------------------------
-
-elif page == "Administration":
-    st.header("🔐 ESPACE ADMINISTRATEUR")
-
-    try:
-        admin_password = st.secrets["ADMIN_PASSWORD"]
-    except Exception:
-        admin_password = os.environ.get("ADMIN_PASSWORD", "")
-
-    if not admin_password:
-        st.warning(
-            "L'accès administrateur n'est pas encore configuré. "
-            "Nous le sécuriserons lors du déploiement."
-        )
-    elif not st.session_state.admin_logged_in:
-        entered_password = st.text_input(
-            "Mot de passe administrateur",
-            type="password"
-        )
-
-        if st.button("Se connecter"):
-            if hmac.compare_digest(entered_password, admin_password):
-                st.session_state.admin_logged_in = True
-                st.rerun()
+        total = 0
+        for i,item in enumerate(cart):
+            c1,c2,c3,c4 = st.columns([4,1,2,1]); c1.write(f'**{item["name"]}** — Taille {item["size"]}')
+            new_qty = c2.number_input('Qté',1,20,int(item['quantity']),key=f'cartqty_{i}')
+            item['quantity'] = new_qty
+            line = item['price']*new_qty; total += line; c3.write(fcfa(line))
+            if c4.button('Retirer',key=f'del_{i}'):
+                cart.pop(i); st.rerun()
+            st.divider()
+        st.subheader(f'Total : {fcfa(total)}')
+        with st.form('order'):
+            name = st.text_input('Nom complet *'); phone = st.text_input('Téléphone *'); city = st.text_input('Ville / commune *'); note = st.text_area('Précisions de livraison (facultatif)')
+            submitted = st.form_submit_button('Préparer ma commande WhatsApp',type='primary')
+        if submitted:
+            if not all(x.strip() for x in [name,phone,city]): st.error('Renseigne ton nom, ton téléphone et ta ville.')
             else:
-                st.error("Mot de passe incorrect.")
+                lines = ['Bonjour THE JERSEY LAB — BY MOMO, je souhaite commander :','']
+                for x in cart: lines.append(f'• {x["name"]} | Taille {x["size"]} | Quantité {x["quantity"]} | {fcfa(x["price"]*x["quantity"])}')
+                lines += ['',f'TOTAL : {fcfa(total)}',f'Nom : {name}',f'Téléphone : {phone}',f'Ville / commune : {city}']
+                if note.strip(): lines.append(f'Précision : {note.strip()}')
+                url = f'https://wa.me/{WHATSAPP}?text={quote(chr(10).join(lines))}'
+                st.link_button('Ouvrir WhatsApp et envoyer',url,type='primary',use_container_width=True)
+                st.caption('La commande est envoyée uniquement après validation du message dans WhatsApp.')
 
+else:
+    st.header('Administration')
+    if not st.session_state.admin:
+        with st.form('login'):
+            password = st.text_input('Mot de passe',type='password')
+            login = st.form_submit_button('Se connecter',type='primary')
+        if login:
+            try: configured = st.secrets.get('ADMIN_PASSWORD','')
+            except Exception: configured = ''
+            configured = configured or os.environ.get('ADMIN_PASSWORD','')
+            if configured and hmac.compare_digest(password,str(configured)):
+                st.session_state.admin = True; st.rerun()
+            else: st.error('Mot de passe incorrect ou ADMIN_PASSWORD non configuré dans Streamlit Secrets.')
     else:
-        if st.button("Se déconnecter"):
-            st.session_state.admin_logged_in = False
-            st.rerun()
-
-        st.success("Bienvenue dans ton espace de gestion.")
-
-        # STATISTIQUES
-        stock_count = sum(int(p.get("stock", 0)) for p in products)
-        st.metric("Modèles de maillots", len(products))
-        st.metric("Maillots en stock", stock_count)
-        st.metric("Commandes enregistrées", len(orders))
-
-        tab_add, tab_manage, tab_orders = st.tabs([
-            "Ajouter un maillot",
-            "Gérer les maillots",
-            "Commandes WhatsApp"
-        ])
-
-        # AJOUTER UN PRODUIT
-        with tab_add:
-            st.subheader("Ajouter un nouveau modèle")
-
-            with st.form("add_product_form", clear_on_submit=True):
-                name = st.text_input("Nom du maillot")
-                category = st.text_input("Catégorie / Club")
-
-                price = st.number_input(
-                    "Prix de vente (FCFA)",
-                    min_value=0,
-                    value=3500,
-                    step=500
-                )
-
-                cost = st.number_input(
-                    "Coût d'achat unitaire (FCFA)",
-                    min_value=0,
-                    value=1250,
-                    step=250
-                )
-
-                stock = st.number_input(
-                    "Quantité en stock",
-                    min_value=0,
-                    value=1,
-                    step=1
-                )
-
-                sizes_text = st.text_input(
-                    "Tailles disponibles, séparées par des virgules",
-                    value="S, M, L, XL"
-                )
-
-                uploaded_photo = st.file_uploader(
-                    "Photo du maillot",
-                    type=["jpg", "jpeg", "png", "webp"]
-                )
-
-                submitted = st.form_submit_button("Enregistrer le maillot")
-
-                if submitted:
-                    if not name.strip():
-                        st.error("Donne un nom au maillot.")
-                    elif int(price) <= 0:
-                        st.error("Le prix doit être supérieur à zéro.")
-                    else:
-                        photo_path = ""
-
-                        if uploaded_photo:
-                            safe_name = (
-                                f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                                f"_{Path(uploaded_photo.name).name}"
-                            )
-                            photo_path = str(UPLOAD_DIR / safe_name)
-
-                            with open(photo_path, "wb") as photo_file:
-                                photo_file.write(uploaded_photo.getvalue())
-
-                        new_product = {
-                            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
-                            "name": name.strip(),
-                            "category": category.strip(),
-                            "price": int(price),
-                            "cost": int(cost),
-                            "stock": int(stock),
-                            "sizes": [
-                                s.strip()
-                                for s in sizes_text.split(",")
-                                if s.strip()
-                            ],
-                            "photo": photo_path
-                        }
-
-                        products.append(new_product)
-                        save_json(PRODUCTS_FILE, products)
-                        st.success(
-                            "Maillot ajouté. Attention : le stockage "
-                            "sera fiabilisé avant la mise en ligne."
-                        )
-                        st.rerun()
-
-        # GÉRER LES PRODUITS
-        with tab_manage:
-            st.subheader("Modifier ou supprimer un maillot")
-
-            if not products:
-                st.info("Tu n'as pas encore ajouté de maillot.")
-            else:
-                for product in products:
-                    with st.expander(product["name"]):
-                        st.write(
-                            f"Prix : {money(product['price'])} — "
-                            f"Stock : {product['stock']}"
-                        )
-
-                        new_price = st.number_input(
-                            "Nouveau prix",
-                            min_value=0,
-                            value=int(product["price"]),
-                            step=500,
-                            key=f"price_{product['id']}"
-                        )
-
-                        new_stock = st.number_input(
-                            "Nouvelle quantité",
-                            min_value=0,
-                            value=int(product["stock"]),
-                            step=1,
-                            key=f"stock_{product['id']}"
-                        )
-
-                        col_save, col_delete = st.columns(2)
-
-                        with col_save:
-                            if st.button(
-                                "Enregistrer",
-                                key=f"save_{product['id']}"
-                            ):
-                                for item in products:
-                                    if item["id"] == product["id"]:
-                                        item["price"] = int(new_price)
-                                        item["stock"] = int(new_stock)
-
-                                save_json(PRODUCTS_FILE, products)
-                                st.success("Modifications enregistrées.")
-                                st.rerun()
-
-                        with col_delete:
-                            if st.button(
-                                "Supprimer",
-                                key=f"delete_{product['id']}"
-                            ):
-                                products = [
-                                    item for item in products
-                                    if item["id"] != product["id"]
-                                ]
-                                save_json(PRODUCTS_FILE, products)
-                                st.rerun()
-
-        # SUIVI MANUEL DES COMMANDES
-        with tab_orders:
-            st.subheader("Enregistrer une commande reçue sur WhatsApp")
-
-            with st.form("add_order_form", clear_on_submit=True):
-                order_client = st.text_input("Nom du client")
-                order_phone = st.text_input("Téléphone du client")
-                order_amount = st.number_input(
-                    "Montant de la commande (FCFA)",
-                    min_value=0,
-                    step=500
-                )
-                order_status = st.selectbox(
-                    "Statut",
-                    ["À confirmer", "Confirmée", "Payée", "Livrée", "Annulée"]
-                )
-
-                order_submitted = st.form_submit_button(
-                    "Enregistrer la commande"
-                )
-
-                if order_submitted:
-                    if not order_client.strip():
-                        st.error("Indique le nom du client.")
-                    else:
-                        orders.append({
-                            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
-                            "client": order_client.strip(),
-                            "phone": order_phone.strip(),
-                            "amount": int(order_amount),
-                            "status": order_status,
-                            "date": datetime.now().isoformat(timespec="minutes")
-                        })
-                        save_json(ORDERS_FILE, orders)
-                        st.success("Commande enregistrée.")
-                        st.rerun()
-
-            if orders:
-                st.divider()
-                for order in reversed(orders):
-                    st.write(
-                        f"**{order['client']}** — "
-                        f"{money(order['amount'])} — "
-                        f"{order['status']} — {order['date']}"
-                    )
-
-
-# --------------------------------------------------
-# PIED DE PAGE
-# --------------------------------------------------
+        if st.button('Se déconnecter'): st.session_state.admin = False; st.rerun()
+        add,manage,orders_tab = st.tabs(['Ajouter un maillot','Gérer les maillots','Commandes'])
+        with add:
+            with st.form('add_product',clear_on_submit=True):
+                name = st.text_input('Nom du maillot *'); category = st.selectbox('Catégorie',['Club','Sélection','Rétro','Autre'])
+                price = st.number_input('Prix (FCFA)',min_value=0,value=15000,step=500)
+                sizes = st.text_input('Tailles (séparées par des virgules)',value='S, M, L, XL')
+                description = st.text_area('Description'); image_url = st.text_input('URL de photo (facultatif)')
+                uploaded = st.file_uploader('Ou importer une photo',type=['jpg','jpeg','png','webp'])
+                available = st.checkbox('Disponible',value=True)
+                submitted = st.form_submit_button('Ajouter le produit',type='primary')
+            if submitted:
+                if not name.strip(): st.error('Le nom est obligatoire.')
+                else:
+                    image = image_url.strip()
+                    if uploaded:
+                        safe = ''.join(ch for ch in uploaded.name if ch.isalnum() or ch in '._-')
+                        dest = UPLOADS / f'{int(datetime.now().timestamp())}_{safe}'
+                        dest.write_bytes(uploaded.getvalue()); image = str(dest)
+                    new_id = max([int(p.get('id',0)) for p in products]+[0])+1
+                    products.append({'id':new_id,'name':name.strip(),'category':category,'price':int(price),'sizes':[s.strip().upper() for s in sizes.split(',') if s.strip()] or ['M'],'description':description.strip(),'image':image,'available':available})
+                    write_json(PRODUCTS,products); st.success('Produit ajouté.'); st.rerun()
+        with manage:
+            if not products: st.info('Aucun produit.')
+            for p in products:
+                with st.expander(f'{p.get("name","Maillot")} — {fcfa(p.get("price",0))}'):
+                    with st.form(f'edit_{p["id"]}'):
+                        new_name = st.text_input('Nom',value=p.get('name',''))
+                        new_price = st.number_input('Prix',min_value=0,value=int(p.get('price',0)),step=500)
+                        new_cat = st.text_input('Catégorie',value=p.get('category','Club'))
+                        old_sizes = p.get('sizes',[])
+                        new_sizes = st.text_input('Tailles',value=', '.join(old_sizes) if isinstance(old_sizes,list) else old_sizes)
+                        new_desc = st.text_area('Description',value=p.get('description',''))
+                        new_image = st.text_input('Lien / chemin de photo',value=p.get('image',''))
+                        new_available = st.checkbox('Disponible',value=p.get('available',True))
+                        c1,c2 = st.columns(2); save = c1.form_submit_button('Enregistrer'); delete = c2.form_submit_button('Supprimer')
+                    if save:
+                        p.update(name=new_name.strip(),price=int(new_price),category=new_cat.strip(),sizes=[s.strip().upper() for s in new_sizes.split(',') if s.strip()] or ['M'],description=new_desc.strip(),image=new_image.strip(),available=new_available)
+                        write_json(PRODUCTS,products); st.rerun()
+                    if delete:
+                        write_json(PRODUCTS,[x for x in products if x['id']!=p['id']]); st.rerun()
+        with orders_tab:
+            st.info('Les commandes WhatsApp ne sont pas automatiquement enregistrées ici. Le client doit envoyer son message dans WhatsApp.')
+            saved_orders = read_json(ORDERS,[])
+            if saved_orders: st.json(saved_orders)
 
 st.divider()
-st.markdown(
-    "<center>THE JERSEY LAB — BY MOMO<br>"
-    "FOOTBALL MEETS STREETWEAR 🖤🩷🤍</center>",
-    unsafe_allow_html=True
-)
+st.caption('THE JERSEY LAB — BY MOMO · Prix des articles hors éventuels frais de livraison. Les données et images enregistrées localement peuvent disparaître après un redémarrage de Streamlit Cloud : prévoir un stockage persistant avant le lancement commercial.')
